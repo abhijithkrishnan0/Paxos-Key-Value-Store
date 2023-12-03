@@ -1,6 +1,9 @@
 package kvpaxos
 
-import "net"
+import (
+	"net"
+	"time"
+)
 import "fmt"
 import "net/rpc"
 import "log"
@@ -25,6 +28,15 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+
+	Instance     int
+	Key          string
+	Value        string
+	Op           string
+	ProposalNum  int
+	ClientId     int64
+	ClientSeqNum int
+	Error        Err
 }
 
 type KVPaxos struct {
@@ -34,18 +46,125 @@ type KVPaxos struct {
 	dead       int32 // for testing
 	unreliable int32 // for testing
 	px         *paxos.Paxos
-
 	// Your definitions here.
+	highestSeqExecuted sync.Map
+	db                 sync.Map
+	curSeq             int
+	client2seq         sync.Map
+}
+
+func (kv *KVPaxos) wait(seq int) bool {
+	to := 10 * time.Millisecond
+	for ; to < 10*time.Second; to *= 2 {
+		if status, _ := kv.px.Status(seq); status == paxos.Decided {
+			return true
+		}
+		time.Sleep(to)
+	}
+	return false
+}
+
+func (kv *KVPaxos) writeToDb(operation Op) {
+	switch operation.Op {
+	case "Put":
+		kv.db.Store(operation.Key, operation.Value)
+	case "Append":
+		if curVal, exists := kv.db.Load(operation.Key); exists {
+			if curStrVal, ok := curVal.(string); ok {
+				kv.db.Store(operation.Key, curStrVal+operation.Value)
+			} else {
+				fmt.Println("\nAppend failed: value is not a string")
+			}
+		} else {
+			kv.db.Store(operation.Key, operation.Value)
+		}
+	}
+
+	if clientSeq, ok := kv.client2seq.Load(operation.ClientId); ok {
+		if seq, ok := clientSeq.(int); ok && seq < operation.ClientSeqNum {
+			kv.client2seq.Store(operation.ClientId, operation.ClientSeqNum)
+		}
+	} else {
+		kv.client2seq.Store(operation.ClientId, operation.ClientSeqNum)
+	}
+}
+
+func (kv *KVPaxos) paxos(op Op) {
+	for {
+		kv.curSeq++
+		kv.px.Start(kv.curSeq, op)
+		if !kv.wait(kv.curSeq) {
+			fmt.Printf("\nTime out using wait function.")
+			continue
+		}
+
+		status, temp := kv.px.Status(kv.curSeq)
+		if status != paxos.Decided {
+			continue
+		}
+
+		decidedOp, ok := temp.(Op)
+		if !ok {
+			fmt.Printf("\nType casting of value returned by px.Status failed")
+			continue
+		}
+
+		kv.writeToDb(decidedOp)
+		kv.px.Done(kv.curSeq)
+		if decidedOp == op {
+			break
+		}
+	}
 }
 
 func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
-	// Your code here.
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	if seq, ok := kv.client2seq.Load(args.ClientID); ok && args.Seq <= seq.(int) {
+		if val, ok := kv.db.Load(args.Key); ok {
+			reply.Err = OK
+			reply.Value = val.(string)
+			return nil
+		}
+		reply.Err = ErrNoKey
+		return nil
+	}
+
+	kv.paxos(Op{
+		Instance:     kv.me,
+		Key:          args.Key,
+		Op:           "Get",
+		ClientId:     args.ClientID,
+		ClientSeqNum: args.Seq,
+	})
+
+	if val, ok := kv.db.Load(args.Key); ok {
+		reply.Err = OK
+		reply.Value = val.(string)
+	} else {
+		reply.Err = ErrNoKey
+	}
 	return nil
 }
 
 func (kv *KVPaxos) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
-	// Your code here.
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if seq, ok := kv.client2seq.Load(args.ClientID); ok && args.Seq <= seq.(int) {
+		reply.Err = OK
+		return nil
+	}
 
+	kv.paxos(Op{
+		Instance:     kv.me,
+		Key:          args.Key,
+		Value:        args.Value,
+		Op:           args.Op,
+		ClientId:     args.ClientID,
+		ClientSeqNum: args.Seq,
+	})
+	reply.Err = OK
 	return nil
 }
 
@@ -89,6 +208,8 @@ func StartServer(servers []string, me int) *KVPaxos {
 	kv.me = me
 
 	// Your initialization code here.
+	kv.db = sync.Map{}
+	kv.highestSeqExecuted = sync.Map{}
 
 	rpcs := rpc.NewServer()
 	rpcs.Register(kv)

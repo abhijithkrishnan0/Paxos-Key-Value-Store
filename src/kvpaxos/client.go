@@ -1,6 +1,9 @@
 package kvpaxos
 
-import "net/rpc"
+import (
+	"net/rpc"
+	"time"
+)
 import "crypto/rand"
 import "math/big"
 
@@ -9,6 +12,8 @@ import "fmt"
 type Clerk struct {
 	servers []string
 	// You will have to modify this struct.
+	clientID int64
+	seq      int
 }
 
 func nrand() int64 {
@@ -22,10 +27,11 @@ func MakeClerk(servers []string) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+	ck.clientID = nrand()
+	ck.seq = 0
 	return ck
 }
 
-//
 // call() sends an RPC to the rpcname handler on server srv
 // with arguments args, waits for the reply, and leaves the
 // reply in reply. the reply argument should be a pointer
@@ -41,7 +47,6 @@ func MakeClerk(servers []string) *Clerk {
 //
 // please use call() to send all RPCs, in client.go and server.go.
 // please don't change this function.
-//
 func call(srv string, rpcname string,
 	args interface{}, reply interface{}) bool {
 	c, errx := rpc.Dial("unix", srv)
@@ -59,21 +64,46 @@ func call(srv string, rpcname string,
 	return false
 }
 
-//
 // fetch the current value for a key.
 // returns "" if the key does not exist.
 // keeps trying forever in the face of all other errors.
-//
 func (ck *Clerk) Get(key string) string {
-	// You will have to modify this function.
-	return ""
+	args := &GetArgs{Key: key, ClientID: ck.clientID, Seq: ck.seq}
+	ck.seq++
+
+	for {
+		for _, srv := range ck.servers {
+			var reply GetReply
+			ok := call(srv, "KVPaxos.Get", args, &reply)
+			if ok {
+				if reply.Err == OK {
+					return reply.Value
+				} else if reply.Err == ErrNoKey {
+					return ""
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
-//
 // shared by Put and Append.
-//
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	// You will have to modify this function.
+	args := &PutAppendArgs{Key: key, Value: value, Op: op, ClientID: ck.clientID, Seq: ck.seq}
+	ck.seq++
+
+	for {
+		for _, srv := range ck.servers {
+			var reply PutAppendReply
+			ok := call(srv, "KVPaxos.PutAppend", args, &reply)
+			if ok {
+				if reply.Err == OK {
+					return
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
