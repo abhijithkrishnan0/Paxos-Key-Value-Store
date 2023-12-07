@@ -2,6 +2,7 @@ package kvpaxos
 
 import (
 	"net/rpc"
+	"sync"
 	"time"
 )
 import "crypto/rand"
@@ -14,6 +15,7 @@ type Clerk struct {
 	// You will have to modify this struct.
 	clientID int64
 	seq      int
+	mu       sync.Mutex
 }
 
 func nrand() int64 {
@@ -68,6 +70,9 @@ func call(srv string, rpcname string,
 // returns "" if the key does not exist.
 // keeps trying forever in the face of all other errors.
 func (ck *Clerk) Get(key string) string {
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+
 	args := &GetArgs{Key: key, ClientID: ck.clientID, Seq: ck.seq}
 	ck.seq++
 
@@ -89,6 +94,9 @@ func (ck *Clerk) Get(key string) string {
 
 // shared by Put and Append.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
+
 	args := &PutAppendArgs{Key: key, Value: value, Op: op, ClientID: ck.clientID, Seq: ck.seq}
 	ck.seq++
 
