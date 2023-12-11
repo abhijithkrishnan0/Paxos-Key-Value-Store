@@ -2,8 +2,6 @@ package kvpaxos
 
 import (
 	"net/rpc"
-	"sync"
-	"time"
 )
 import "crypto/rand"
 import "math/big"
@@ -15,7 +13,6 @@ type Clerk struct {
 	// You will have to modify this struct.
 	clientID int64
 	seq      int
-	mu       sync.Mutex
 }
 
 func nrand() int64 {
@@ -70,47 +67,38 @@ func call(srv string, rpcname string,
 // returns "" if the key does not exist.
 // keeps trying forever in the face of all other errors.
 func (ck *Clerk) Get(key string) string {
-	ck.mu.Lock()
-	defer ck.mu.Unlock()
-
 	args := &GetArgs{Key: key, ClientID: ck.clientID, Seq: ck.seq}
 	ck.seq++
 
+	index := 0
+	srv := ck.servers[index]
 	for {
-		for _, srv := range ck.servers {
-			var reply GetReply
-			ok := call(srv, "KVPaxos.Get", args, &reply)
-			if ok {
-				if reply.Err == OK {
-					return reply.Value
-				} else if reply.Err == ErrNoKey {
-					return ""
-				}
-			}
+		var reply GetReply
+		ok := call(srv, "KVPaxos.Get", args, &reply)
+		if ok {
+			return reply.Value
 		}
-		time.Sleep(100 * time.Millisecond)
+		index++
+		srv = ck.servers[(index)%len(ck.servers)]
+
 	}
 }
 
 // shared by Put and Append.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	ck.mu.Lock()
-	defer ck.mu.Unlock()
-
 	args := &PutAppendArgs{Key: key, Value: value, Op: op, ClientID: ck.clientID, Seq: ck.seq}
 	ck.seq++
 
+	index := 0
+	srv := ck.servers[index]
 	for {
-		for _, srv := range ck.servers {
-			var reply PutAppendReply
-			ok := call(srv, "KVPaxos.PutAppend", args, &reply)
-			if ok {
-				if reply.Err == OK {
-					return
-				}
-			}
+		var reply PutAppendReply
+		ok := call(srv, "KVPaxos.PutAppend", args, &reply)
+		if ok {
+			return
 		}
-		time.Sleep(100 * time.Millisecond)
+		index++
+		srv = ck.servers[index%len(ck.servers)]
 	}
 }
 

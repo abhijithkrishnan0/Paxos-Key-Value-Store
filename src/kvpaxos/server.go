@@ -58,7 +58,7 @@ func (kv *KVPaxos) writeToDb(op Op) {
 			if curStrVal, ok := curVal.(string); ok {
 				kv.database.Store(op.Key, curStrVal+op.Value)
 			} else {
-				fmt.Println("\nAppend failed: value is not a string")
+				//fmt.Println("\nAppend failed: value is not a string")
 			}
 		} else {
 			kv.database.Store(op.Key, op.Value)
@@ -75,44 +75,63 @@ func (kv *KVPaxos) writeToDb(op Op) {
 }
 
 func (kv *KVPaxos) runPaxos(op Op) {
-	for {
+	for !kv.isdead() {
 		kv.curSeq++
 		kv.px.Start(kv.curSeq, op)
 
 		waitSuccess := false
-		for to := 1; to < 10; to += 1 {
-			status, _ := kv.px.Status(kv.curSeq)
-			if status == paxos.Decided {
+		to := 10 * time.Millisecond
+		for {
+			status, val := kv.px.Status(kv.curSeq)
+			if status == paxos.Decided && val == op {
 				waitSuccess = true
 				break
-			}
-			if status == paxos.Forgotten {
+			} else if status == paxos.Decided {
+				learntOp := val.(Op)
+				seq, ok := kv.clientSeq.Load(learntOp.ClientId)
+				if !ok || seq.(int) < learntOp.ClientSeqNum {
+					kv.writeToDb(learntOp)
+				}
 				waitSuccess = false
 				break
+			} else if status == paxos.Pending {
+				time.Sleep(to)
+				if to < 10*time.Second {
+					to *= 2
+				}
+				continue
+			} else if status == paxos.Forgotten {
+				//fmt.Printf(" shouldnt happend \n")
 			}
-			time.Sleep(10 * time.Millisecond)
+			//} else if status == paxos.Forgotten {
+			//	waitSuccess = false
+			//	break
+			//}
+
 		}
 		if !waitSuccess {
-			fmt.Printf("\nPaxos timed out! Retrying!")
+			//fmt.Printf("\nPaxos timed out! Retrying!")
 			continue
 		}
-
-		status, temp := kv.px.Status(kv.curSeq)
-		if status != paxos.Decided {
-			continue
-		}
-
-		decidedOp, ok := temp.(Op)
-		if !ok {
-			fmt.Printf("\nERROR: Decided value is not an Op!")
-			continue
-		}
-
-		kv.writeToDb(decidedOp)
+		//
+		//status, temp := kv.px.Status(kv.curSeq)
+		//if status != paxos.Decided {
+		//	continue
+		//}
+		//
+		//decidedOp, ok := temp.(Op)
+		//if !ok {
+		//	fmt.Printf("\nERROR: Decided value is not an Op!")
+		//	continue
+		//}
+		//
+		//fmt.Printf("Appended %v to seq %v\n", op, kv.curSeq)
+		kv.writeToDb(op)
 		kv.px.Done(kv.curSeq)
-		if decidedOp == op {
-			break
-		}
+		return
+		//if decidedOp == op {
+		//	break
+		//}
 	}
 }
 

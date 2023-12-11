@@ -57,8 +57,10 @@ type Paxos struct {
 	me         int // index into peers[]
 
 	// Your data here.
-	instances map[int]*PaxosInstance
-	doneSeqs  []int
+	instances     map[int]*PaxosInstance
+	doneSeqs      []int
+	maxSeq        int
+	lastForgotten int
 }
 
 type PaxosInstance struct {
@@ -110,24 +112,24 @@ func call(srv string, name string, args interface{}, reply interface{}) bool {
 // call Status() to find out if/when agreement
 // is reached.
 func (px *Paxos) Start(seq int, v interface{}) {
-	px.mu.Lock()
-	defer px.mu.Unlock()
+	//px.mu.Lock()
+	//defer px.mu.Unlock()
 
-	if seq < (px.minDoneSeq() + 1) {
+	if seq < (px.Min()) {
 		return
 	}
 
-	_, ok := px.instances[seq]
-	if ok {
-		return
-	}
+	//_, ok := px.instances[seq]
+	//if ok {
+	//	return
+	//}
 
-	px.instances[seq] = &PaxosInstance{
-		Fate:           Pending,
-		proposalNumber: px.me + 1,
-		n_a:            -1,
-		n_p:            -1,
-	}
+	//px.instances[seq] = &PaxosInstance{
+	//	Fate:           Pending,
+	//	proposalNumber: px.me + 1,
+	//	n_a:            -1,
+	//	n_p:            -1,
+	//}
 
 	go px.proposer(seq, v)
 }
@@ -139,7 +141,7 @@ func (px *Paxos) proposer(seq int, v interface{}) {
 
 	var n = px.me + 1
 	lastTried := n
-	seenPrepareOK := make(map[int]bool)
+	//seenPrepareOK := make(map[int]bool)
 
 	for !px.isdead() {
 		n = proposeNumber(lastTried)
@@ -154,7 +156,10 @@ func (px *Paxos) proposer(seq int, v interface{}) {
 			ok := false
 			if px.me == peerIdx {
 				ok = true
-				px.Prepare(args, &reply)
+				err := px.Prepare(args, &reply)
+				if err != nil {
+					return
+				}
 			} else {
 				ok = call(peer, "Paxos.Prepare", args, &reply)
 			}
@@ -166,13 +171,15 @@ func (px *Paxos) proposer(seq int, v interface{}) {
 				}
 				if reply.OK {
 					prepOKs++
-					seenPrepareOK[peerIdx] = true
+					//seenPrepareOK[peerIdx] = true
 				}
+				px.mu.Lock()
 				px.updateDoneSeqs(peerIdx, reply.HighestDone)
+				px.mu.Unlock()
 			}
 		}
 
-		if prepOKs >= len(px.peers)/2+1 {
+		if prepOKs >= (len(px.peers)/2)+1 {
 			acceptOKs := 0
 			for peerIdx, peer := range px.peers {
 				args := &AcceptArgs{Seq: seq, N: n, Value: v, PeerID: px.me}
@@ -189,7 +196,7 @@ func (px *Paxos) proposer(seq int, v interface{}) {
 				}
 			}
 
-			if acceptOKs >= len(px.peers)/2+1 {
+			if acceptOKs >= (len(px.peers)/2)+1 {
 				for peerIdx, peer := range px.peers {
 					args := &DecidedArgs{Seq: seq, Value: v, PeerID: px.me, ProposalNumber: n}
 					var reply DecidedReply
@@ -251,12 +258,12 @@ func (px *Paxos) Prepare(args *PrepareArgs, reply *PrepareReply) error {
 
 	_, exists := px.instances[args.Seq]
 	if !exists {
-		px.instances[args.Seq] = &PaxosInstance{Fate: Pending, proposalNumber: -1, n_p: args.N, n_a: -1}
+		px.instances[args.Seq] = &PaxosInstance{Fate: Pending, proposalNumber: -1, n_p: -1, n_a: -1}
 	}
 
 	reply.NA = px.instances[args.Seq].n_a
 	reply.VA = px.instances[args.Seq].v_a
-	if args.N < px.instances[args.Seq].n_p {
+	if args.N <= px.instances[args.Seq].n_p {
 		reply.OK = false
 	} else {
 		px.instances[args.Seq].n_p = args.N
@@ -301,8 +308,11 @@ func (px *Paxos) Decided(args *DecidedArgs, reply *DecidedReply) error {
 		}
 		px.instances[args.Seq] = instance
 	}
-	instance.Fate = Decided
-	instance.v_a = args.Value
+	px.instances[args.Seq].Fate = Decided
+	px.instances[args.Seq].v_a = args.Value
+	if px.maxSeq < args.Seq {
+		px.maxSeq = args.Seq
+	}
 	return nil
 }
 
@@ -314,20 +324,18 @@ func (px *Paxos) Done(seq int) {
 	px.mu.Lock()
 	defer px.mu.Unlock()
 	px.updateDoneSeqs(px.me, seq)
-	px.deleteBeforeSeq(seq + 1)
 }
 
 func (px *Paxos) updateDoneSeqs(peerID int, doneSeq int) {
 	if doneSeq > px.doneSeqs[peerID] {
 		px.doneSeqs[peerID] = doneSeq
 	}
+	px.deleteBeforeSeq(px.minDoneSeq())
 }
 
 func (px *Paxos) deleteBeforeSeq(minDone int) {
-	for seq, instance := range px.instances {
-		if instance != nil && seq < minDone {
-			delete(px.instances, seq)
-		}
+	for i := px.lastForgotten; i < minDone; i++ {
+		delete(px.instances, i)
 	}
 }
 
@@ -338,13 +346,7 @@ func (px *Paxos) Max() int {
 	px.mu.Lock()
 	defer px.mu.Unlock()
 
-	maxVal := math.MinInt
-	for seq := range px.instances {
-		if seq > maxVal {
-			maxVal = seq
-		}
-	}
-	return maxVal
+	return px.maxSeq
 }
 
 // Min() should return one more than the minimum among z_i,
@@ -400,11 +402,11 @@ func (px *Paxos) Status(seq int) (Fate, interface{}) {
 	defer px.mu.Unlock()
 
 	instance, exists := px.instances[seq]
-	if seq <= px.minDoneSeq() || !exists {
+	if seq < px.minDoneSeq() {
 		return Forgotten, nil
 	}
 
-	if instance.Fate == Decided {
+	if exists && instance.Fate == Decided {
 		return instance.Fate, instance.v_a
 	}
 	return Pending, nil
@@ -451,6 +453,9 @@ func Make(peers []string, me int, rpcs *rpc.Server) *Paxos {
 	for i := range px.doneSeqs {
 		px.doneSeqs[i] = -1
 	}
+	px.maxSeq = -1
+
+	px.lastForgotten = -1
 
 	// Your initialization code here.
 
