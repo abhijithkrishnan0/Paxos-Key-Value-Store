@@ -1,21 +1,3 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-24ddc0f5d75046c5622901739e7c5dd533143b0c8e959d652212380cedb1ea36.svg)](https://classroom.github.com/a/zdZvYEbZ)\
-Name 1: Abhijith Krishnan \
-Name 2: Abhijeeth Padarthi 
-
-## Submission
-**Please replace paxos/paxos.go with your implementation in the first 
-project.** Similarly, You only need to push your code to the github repo. No 
-further action needed on Canvas. Please make sure you push your latest 
-changes before the cutoff time. After the deadline, you are not able to push 
-any commits.
-
-## Project Overview
-In this assignment, you'll implement a fault-tolerant key-value store on 
-top of Paxos. You need to fill in the necessary parts in `src/kvpaxos/client.go`, 
-`src/kvpaxos/server.go`, and `src/kvpaxos/common.go`. Similarly, the 
-communication between servers and clients is based on rpc, which is also 
-provided in the template (`call()`).
-
 The key-value store includes three kinds of operations: Put, Get, and Append.
 Append performs the same as Put when the key is not in the store.
 Otherwise, it appends new value to the existing value. For example,
@@ -64,52 +46,4 @@ Here's a plan for reference:
    detection frees server memory quickly, for example by having the client tell
    the servers which RPCs it has heard a reply for. It's OK to piggyback this
    information on the next client request.
-
-Hint: your server should try to assign the next available Paxos instance (
-sequence number) to each incoming client RPC. However, some other kvpaxos
-replica may also be trying to use that instance for a different client's
-operation. So the kvpaxos server has to be prepared to try different instances.
-
-Hint: your kvpaxos servers should not directly communicate; they should only
-interact with each other through the Paxos log.
-
-Hint: as in Lab 2, you will need to uniquely identify client operations to
-ensure that they execute just once. Also as in Lab 2, you can assume that each
-clerk has only one outstanding Put, Get, or Append.
-
-Hint: a kvpaxos server should not complete a Get() RPC if it is not part of a
-majority (so that it does not serve stale data). This means that each Get() (as
-well as each Put() and Append()) must involve Paxos agreement.
-
-Hint: don't forget to call the Paxos Done() method when a kvpaxos has processed
-an instance and will no longer need it or any previous instance.
-
-Hint: your code will need to wait for Paxos instances to complete agreement. The
-only way to do this is to periodically call Status(), sleeping between calls.
-How long to sleep? A good plan is to check quickly at first, and then more
-slowly:
-```
-to := 10 * time.Millisecond
-for {
-status, _ := kv.px.Status(seq)
-if status == paxos.Decided{
-...
-return
-}
-time.Sleep(to)
-if to < 10 * time.Second {
-to *= 2
-}
-}
-```
-Hint: if one of your kvpaxos servers falls behind (i.e. did not participate in
-the agreement for some instance), it will later need to find out what (if
-anything) was agree to. A reasonable way to to this is to call Start(), which
-will either discover the previously agreed-to value, or cause agreement to
-happen. Think about what value would be reasonable to pass to Start() in this
-situation.
-
-Hint: When the test fails, check for gob error (e.g. "rpc: writing response:
-gob: type not registered for interface ...") in the log because go doesn't
-consider the error fatal, although it is fatal for the lab.
 
