@@ -13,5 +13,4 @@ Paxos peer. Paxos takes the form of a library that is included in each kvpaxos
 server. A kvpaxos server talks to its local Paxos peer (**via method calls**).
 All kvpaxos replicas should stay identical; the only exception is that some
 replicas may lag others if they are not reachable. If a replica isn't reachable
-for a while, but then starts being reachable, it should eventually catch up (
-learn about operations that it missed).
+for a while, but then starts being reachable, it should eventually catch up.
